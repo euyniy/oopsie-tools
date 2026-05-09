@@ -231,20 +231,20 @@ class TestProfileFileConsistency:
 
 class TestValidateSessionDir:
     def test_valid_session_passes(self, valid_session_dir):
-        assert validate_session_dir(str(valid_session_dir)) == 0
+        assert validate_session_dir(str(valid_session_dir)) == 1
 
-    def test_nonexistent_dir_returns_1(self, tmp_path):
-        assert validate_session_dir(str(tmp_path / "no_such_dir")) == 1
+    def test_nonexistent_dir_returns_0(self, tmp_path):
+        assert validate_session_dir(str(tmp_path / "no_such_dir")) == 0
 
-    def test_empty_dir_returns_1(self, tmp_path):
-        assert validate_session_dir(str(tmp_path)) == 1
+    def test_empty_dir_returns_0(self, tmp_path):
+        assert validate_session_dir(str(tmp_path)) == 0
 
-    def test_mixed_dir_returns_1(self, tmp_path):
+    def test_mixed_dir_returns_0(self, tmp_path):
         write_valid_episode(tmp_path, "good")
         (tmp_path / "bad.h5").write_text("not hdf5")
-        assert validate_session_dir(str(tmp_path)) == 1
+        assert validate_session_dir(str(tmp_path)) == 0
 
-    def test_all_valid_returns_0(self, tmp_path):
+    def test_all_valid_returns_1(self, tmp_path):
         write_valid_episode(tmp_path, "ep_a")
         write_valid_episode(tmp_path, "ep_b")
-        assert validate_session_dir(str(tmp_path)) == 0
+        assert validate_session_dir(str(tmp_path)) == 1

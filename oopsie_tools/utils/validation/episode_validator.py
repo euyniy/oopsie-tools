@@ -17,8 +17,8 @@ from oopsie_tools.utils.validation.episode_data import EpisodeData
 
 MAX_IMAGE_SIZE = 1280
 MIN_IMAGE_SIZE = 180
-MIN_TRAJECTORY_LENGTH = 2
-MAX_TRAJECTORY_LENGTH = 300
+MIN_EPISODE_LENGTH = 1
+MAX_EPISODE_LENGTH = 300
 
 
 def validate_episode(data: EpisodeData, strict_annotation_check: bool = False) -> None:
@@ -45,9 +45,9 @@ def _validate_metadata(data: EpisodeData) -> None:
     assert data.lab_id != "your_lab_id", "lab_id has not been changed from the placeholder value"
     assert data.operator_name, "operator_name is empty"
     assert data.control_freq > 0, "control_freq must be > 0"
-    assert MIN_TRAJECTORY_LENGTH <= data.trajectory_length <= MAX_TRAJECTORY_LENGTH, (
+    assert MIN_EPISODE_LENGTH <= data.trajectory_length/data.control_freq <= MAX_EPISODE_LENGTH, (
         f"trajectory_length {data.trajectory_length} out of range "
-        f"[{MIN_TRAJECTORY_LENGTH}, {MAX_TRAJECTORY_LENGTH}]"
+        f"[{MIN_EPISODE_LENGTH}, {MAX_EPISODE_LENGTH}]"
     )
 
 
