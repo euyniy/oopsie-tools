@@ -13,6 +13,7 @@ dependencies = [
     "h5py>=3.7.0",
     "huggingface-hub>=0.36.2",
     "imageio>=2.35.1",
+    "imageio-ffmpeg>=0.5.1",
     "numpy>=1.20.0",
     "opencv-python>=4.11.0.86",
     "pytest>=8.3.5",
@@ -41,6 +42,12 @@ droid = [
     "pillow>=10.0.0",
     "tqdm>=4.66.0",
     "tyro>=0.9.0",
+]
+
+# For converting LeRobot-style Hugging Face datasets such as MolmoAct2 eval rollouts
+# Install with: uv sync --extra lerobot
+lerobot = [
+    "pyarrow>=14.0.0",
 ]
 
 [tool.uv]
