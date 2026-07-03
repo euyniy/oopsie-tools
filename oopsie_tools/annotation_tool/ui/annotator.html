@@ -683,6 +683,14 @@
           const id = q.id || q.name || q.key;
           if (!id) continue;
           const type = String(q.type || "text").toLowerCase();
+          // Conditionally-hidden questions (e.g. failure fields when "Success" is
+          // selected) count as empty: they must neither block save (#35) nor be
+          // persisted with stale values the annotator can no longer see.
+          const group = document.querySelector(`[data-question-id="${CSS.escape(id)}"]`);
+          if (group && group.style.display === "none") {
+            out[id] = type === "checkbox" ? [] : "";
+            continue;
+          }
           if (type === "checkbox") {
             const els = Array.from(document.querySelectorAll(`input[type="checkbox"][name="${CSS.escape(id)}"]`));
             out[id] = els.filter(e => e.checked).map(e => e.value);

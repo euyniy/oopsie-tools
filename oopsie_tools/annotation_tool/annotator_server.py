@@ -537,12 +537,11 @@ def api_h5_sample():
                 metadata["success"] = _read_h5_attr(fa, "success", None)
             existing_annotation = _read_existing_annotation_dict(ea, ann_name)
 
-        # breakpoint()
-        image_group = h5f.get("image_observations")
-        if isinstance(image_group, h5py.Group):
-            for cam in image_group.keys():
+        video_paths_group = h5f.get("observations/video_paths")
+        if isinstance(video_paths_group, h5py.Group):
+            for cam in video_paths_group.keys():
                 try:
-                    raw_path = _decode_h5_value(image_group[cam][()])
+                    raw_path = _decode_h5_value(video_paths_group[cam][()])
                 except Exception:
                     continue
                 if not isinstance(raw_path, str) or not raw_path:
@@ -555,7 +554,7 @@ def api_h5_sample():
                     continue
                 video_urls[str(cam)] = f"/videos-path/{quote(rel, safe='/')}"
 
-    # Fallback: if HDF5 doesn't store `image_observations/*` paths, try to infer
+    # Fallback: if HDF5 doesn't store `observations/video_paths/*`, try to infer
     # videos from files next to the H5: `<stem>_<cam>.mp4`.
     if not video_urls:
         stem = h5_path.stem
