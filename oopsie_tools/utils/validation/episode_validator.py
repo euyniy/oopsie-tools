@@ -57,7 +57,7 @@ def _validate_profile_consistency(data: EpisodeData) -> None:
     assert profile is not None
 
     for key in profile.robot_state_keys:
-        assert key in data.observations, f"Missing observations key required by profile: {key}. Got {list(data.observations['robot_states'].keys())}, required by profile.robot_state_keys={profile.robot_state_keys}"
+        assert key in data.observations, f"Missing observations key required by profile: {key}. Got {list(data.observations.keys())}, required by profile.robot_state_keys={profile.robot_state_keys}"
 
     for key in profile.action_space:
         assert key in data.actions, (
@@ -71,7 +71,10 @@ def _validate_profile_consistency(data: EpisodeData) -> None:
     if jp_obs is not None and jp_obs.ndim >= 2:
         assert len(profile.robot_state_joint_names) == jp_obs.shape[-1], (
             "robot_state_joint_names count does not match observations/joint_position DOF: "
-            f"expected {jp_obs.shape[-1]}, got {len(profile.robot_state_joint_names)}"
+            f"the robot profile lists {len(profile.robot_state_joint_names)} joint name(s) in "
+            f"robot_state_joint_names, but the recorded observations/joint_position has "
+            f"{jp_obs.shape[-1]} DOF (last axis). Fix robot_state_joint_names in the robot "
+            "profile (or the recorded joint_position) so the two counts match."
         )
 
     if profile.action_joint_names:
@@ -80,7 +83,10 @@ def _validate_profile_consistency(data: EpisodeData) -> None:
             if arr is not None and arr.ndim >= 2:
                 assert len(profile.action_joint_names) == arr.shape[-1], (
                     f"action_joint_names count does not match actions/{key} DOF: "
-                    f"expected {arr.shape[-1]}, got {len(profile.action_joint_names)}"
+                    f"the robot profile lists {len(profile.action_joint_names)} joint name(s) in "
+                    f"action_joint_names, but the recorded actions/{key} has {arr.shape[-1]} DOF "
+                    "(last axis). Fix action_joint_names in the robot profile (or the recorded "
+                    "actions) so the two counts match."
                 )
 
 
