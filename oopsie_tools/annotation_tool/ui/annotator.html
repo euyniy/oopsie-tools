@@ -89,7 +89,7 @@
         display: grid;
         grid-template-columns: 260px 1fr 400px;
         gap: 20px;
-        align-items: stretch;
+        align-items: start;
       }
 
       /* Left: h5 tree (styled like sample-list) */
@@ -100,7 +100,10 @@
         display: flex;
         flex-direction: column;
         min-height: 0;
-        align-self: stretch;
+        align-self: start;
+        position: sticky;
+        top: 12px;
+        max-height: calc(100vh - 24px);
       }
       .sidebar #h5List {
         flex: 1 1 auto;
@@ -108,6 +111,8 @@
         overflow-y: auto;
         margin-top: 10px;
       }
+      .h5-nav { display: flex; gap: 6px; margin-bottom: 10px; }
+      .h5-nav button { flex: 1 1 0; padding: 7px 8px; font-size: 0.8rem; }
       .h5-header { display:flex; align-items:center; margin-bottom: 10px; padding: 0 5px; }
       .h5-title { font-size: 0.9rem; color: #94a3b8; font-weight: 600; }
       .h5-search { width: 100%; margin: 0 0 10px; padding: 10px; border: 1px solid #333; border-radius: 6px; background: #1a1a2e; color: #fff; font-size: 0.95rem; }
@@ -154,8 +159,27 @@
         display: flex;
         flex-direction: column;
         min-height: 0;
-        align-self: stretch;
+        align-self: start;
+        position: sticky;
+        top: 12px;
+        max-height: calc(100vh - 24px);
       }
+      .form-scroll { flex: 1 1 auto; min-height: 0; overflow-y: auto; }
+      .save-bar {
+        flex: 0 0 auto;
+        margin-top: 12px;
+        padding-top: 12px;
+        border-top: 1px solid #334155;
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        flex-wrap: wrap;
+      }
+      .save-bar .spacer { flex: 1 1 auto; }
+      .dirty-indicator { font-size: 0.8rem; font-weight: 600; color: #fbbf24; }
+      .dirty-indicator.saved { color: #4ade80; }
+      .autoadvance-label { font-size: 0.75rem; color: #94a3b8; display: flex; align-items: center; gap: 5px; cursor: pointer; user-select: none; }
+      .autoadvance-label input { width: 15px; height: 15px; }
       .form-group { margin-bottom: 20px; }
       .form-divider {
         margin: 8px 0 14px;
@@ -305,10 +329,12 @@
 
       @media (max-width: 1200px) {
         .main-content { grid-template-columns: 1fr; }
+        .sidebar, .form-section { position: static; max-height: none; }
         .sidebar #h5List {
           flex: 0 1 auto;
           max-height: min(420px, 50vh);
         }
+        .form-scroll { overflow-y: visible; }
         .videos-grid { grid-template-columns: 1fr; }
       }
     </style>
@@ -347,6 +373,10 @@
             <div class="h5-legend-row"><span class="tick">✓✓</span> Complete: Success/failure Annotated with description, category, and severity.</div>
           </div>
           <input id="h5Search" class="h5-search" type="text" placeholder="Search…" />
+          <div class="h5-nav">
+            <button id="prevBtn" type="button" title="Previous episode (←)">◀ Prev</button>
+            <button id="nextBtn" type="button" title="Next episode (→)">Next ▶</button>
+          </div>
           <div class="muted" id="h5Count"></div>
           <div id="h5List"></div>
         </div>
@@ -373,15 +403,22 @@
         </div>
 
         <div class="form-section">
-          <div class="task-instruction-box">
-            <div class="task-instruction-box-label">Task instruction</div>
-            <div class="task-instruction-box-value" id="sessionTaskInstruction">—</div>
+          <div class="form-scroll">
+            <div class="task-instruction-box">
+              <div class="task-instruction-box-label">Task instruction</div>
+              <div class="task-instruction-box-value" id="sessionTaskInstruction">—</div>
+            </div>
+            <div id="metadataPanel" style="display:none;"></div>
+            <div id="questionnaire"></div>
           </div>
-          <div id="metadataPanel" style="display:none;"></div>
-          <div id="questionnaire"></div>
-          <div style="margin-top:12px;">
+          <div class="save-bar" id="saveBar">
             <button class="primary" id="saveBtn">Save Annotation</button>
-            <span class="muted" id="saveMsg" style="margin-left:10px;"></span>
+            <span class="dirty-indicator" id="dirtyIndicator"></span>
+            <span class="muted" id="saveMsg"></span>
+            <span class="spacer"></span>
+            <label class="autoadvance-label" title="After saving, jump to the next episode">
+              <input type="checkbox" id="autoAdvanceChk" /> auto-advance
+            </label>
           </div>
         </div>
       </div>
@@ -470,16 +507,14 @@
         for (const id of ["instructionCard", "runningCard", "annotateCard"]) {
           el(id).style.display = (id === which) ? "" : "none";
         }
-        // Keep questionnaire panel visible only when annotating/browsing
+        // Keep questionnaire panel + save bar visible only when annotating/browsing
         if (which === "annotateCard") {
           el("questionnaire").style.display = "";
-          el("saveBtn").style.display = "";
-          el("saveMsg").style.display = "";
+          el("saveBar").style.display = "";
         } else {
           el("metadataPanel").style.display = "none";
           el("questionnaire").style.display = "none";
-          el("saveBtn").style.display = "none";
-          el("saveMsg").style.display = "none";
+          el("saveBar").style.display = "none";
         }
       }
 
@@ -759,7 +794,85 @@
       let questionnaireRenderedFor = null;
       let videosRenderedFor = null;
       let lastH5ListSig = "";
+      let isDirty = false; // unsaved edits in the current form (#34)
       const expandedDirs = new Set([""]); // "" = root
+
+      // ── Episode navigation (#24, #33) ──────────────────────────────────────
+      function currentFlatIndex() {
+        const order = window.__flatFileOrder || [];
+        return browseRelPath ? order.indexOf(browseRelPath) : -1;
+      }
+      function updateNavButtons() {
+        const order = window.__flatFileOrder || [];
+        const idx = currentFlatIndex();
+        const prev = el("prevBtn"), next = el("nextBtn");
+        if (prev) prev.disabled = !(idx > 0);
+        if (next) next.disabled = !(order.length && idx >= 0 && idx < order.length - 1);
+      }
+      function expandParents(rel) {
+        const parts = String(rel || "").split("/").filter(Boolean);
+        let prefix = "";
+        for (const p of parts.slice(0, -1)) {
+          prefix = prefix ? `${prefix}/${p}` : p;
+          expandedDirs.add(prefix);
+        }
+      }
+      function scrollActiveIntoView() {
+        const node = document.querySelector('#h5List .tree-row.active');
+        if (node) node.scrollIntoView({ block: "nearest" });
+      }
+      async function navigateBy(delta) {
+        const order = window.__flatFileOrder || [];
+        if (!order.length) return;
+        let idx = currentFlatIndex();
+        let target = idx < 0 ? (delta > 0 ? 0 : order.length - 1) : idx + delta;
+        target = Math.max(0, Math.min(order.length - 1, target));
+        const rel = order[target];
+        if (!rel || rel === browseRelPath) return;
+        if (!(await confirmDiscardIfDirty())) return;
+        expandParents(rel);
+        await selectBrowseH5(rel);
+        scrollActiveIntoView();
+      }
+
+      // ── Dirty / saved indicator (#34) ──────────────────────────────────────
+      function setDirty(v) {
+        isDirty = !!v;
+        const ind = el("dirtyIndicator");
+        if (!ind) return;
+        ind.classList.remove("saved");
+        ind.textContent = isDirty ? "● Unsaved changes" : "";
+      }
+      function markSaved() {
+        isDirty = false;
+        const ind = el("dirtyIndicator");
+        if (ind) { ind.textContent = "✓ Saved"; ind.classList.add("saved"); }
+      }
+      async function confirmDiscardIfDirty() {
+        if (!isDirty) return true;
+        const ok = window.confirm("You have unsaved changes. Discard them and continue?");
+        if (ok) setDirty(false);
+        return ok;
+      }
+
+      // ── Success/failure hotkeys (#33) ──────────────────────────────────────
+      function setBinarySuccess(val) {
+        const radios = document.querySelectorAll('input[type="radio"][name="binary_success"]');
+        if (!radios.length) return;
+        let changed = false;
+        radios.forEach((r) => {
+          const match = r.value === val;
+          if (r.checked !== match) changed = true;
+          r.checked = match;
+        });
+        applySuccessConditional();
+        if (changed) { setDirty(true); el("saveMsg").textContent = ""; }
+      }
+
+      function autoAdvanceEnabled() {
+        const chk = el("autoAdvanceChk");
+        return chk ? chk.checked : false;
+      }
 
       async function loadH5List() {
         const items = await jget("/api/h5/list");
@@ -868,6 +981,19 @@
         renderDir(root, "", 0);
         el("h5List").innerHTML = lines.join("");
 
+        // Flattened file order (dirs-first, name-sorted) matching the tree's visual
+        // order, but independent of collapse state so Prev/Next can traverse every
+        // filtered file. #24 / #33 (auto-advance) navigate through this array.
+        const flatOrder = [];
+        (function collect(node) {
+          const dirs = Array.from(node.dirs.entries()).sort((a, b) => a[0].localeCompare(b[0]));
+          const files = node.files.slice().sort((a, b) => String(a._fileName).localeCompare(String(b._fileName)));
+          for (const [, child] of dirs) collect(child);
+          for (const it of files) flatOrder.push(String(it.rel_path || ""));
+        })(root);
+        window.__flatFileOrder = flatOrder;
+        updateNavButtons();
+
         el("h5List").querySelectorAll('[data-kind="dir"]').forEach(node => {
           node.addEventListener("click", () => {
             const dir = node.getAttribute("data-dir") || "";
@@ -879,7 +1005,8 @@
         el("h5List").querySelectorAll('[data-kind="file"]').forEach(node => {
           node.addEventListener("click", async () => {
             const rp = node.getAttribute("data-rel");
-            if (!rp) return;
+            if (!rp || rp === browseRelPath) return;
+            if (!(await confirmDiscardIfDirty())) return;
             await selectBrowseH5(rp);
           });
         });
@@ -908,6 +1035,9 @@
           }
         }
         applySuccessConditional();
+        // Programmatic population does not fire input/change events, so the form
+        // starts clean after (re)loading an episode.
+        setDirty(false);
       }
 
       async function selectBrowseH5(relPath) {
@@ -1038,6 +1168,7 @@
             const q = await jget("/api/questionnaire");
             renderQuestionnaire(q);
             questionnaireRenderedFor = nextSampleId;
+            setDirty(false);
           }
         } else {
           currentSampleId = null;
@@ -1091,8 +1222,12 @@
           } else {
             await jpost("/api/annotations", { sample_id: currentSampleId, ...answers });
           }
-          el("saveMsg").textContent = "Saved.";
+          el("saveMsg").textContent = "";
+          markSaved();
           await pollH5List();
+          if (browseRelPath && autoAdvanceEnabled()) {
+            await navigateBy(1);
+          }
         } catch (e) {
           el("saveMsg").textContent = "Error saving.";
           alert(String(e));
@@ -1102,6 +1237,48 @@
       });
 
       el("h5Search").addEventListener("input", () => renderH5List());
+
+      // Prev/Next episode navigation (#24)
+      el("prevBtn").addEventListener("click", () => navigateBy(-1));
+      el("nextBtn").addEventListener("click", () => navigateBy(1));
+
+      // Dirty tracking: any real edit flips the indicator and clears stale messages (#34).
+      el("questionnaire").addEventListener("input", () => { setDirty(true); el("saveMsg").textContent = ""; });
+      el("questionnaire").addEventListener("change", () => { setDirty(true); el("saveMsg").textContent = ""; });
+
+      // Persisted auto-advance-on-save preference (#33), default on.
+      (function initAutoAdvance() {
+        const KEY = "oopsie_auto_advance";
+        const chk = el("autoAdvanceChk");
+        if (!chk) return;
+        const saved = localStorage.getItem(KEY);
+        chk.checked = saved === null ? true : saved === "1";
+        chk.addEventListener("change", () => localStorage.setItem(KEY, chk.checked ? "1" : "0"));
+      })();
+
+      // Keyboard shortcuts (#33). Ctrl/Cmd+S / Ctrl/Cmd+Enter always save; the rest
+      // are ignored while typing in a field.
+      document.addEventListener("keydown", (e) => {
+        const t = e.target;
+        const typing = t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.tagName === "SELECT" || t.isContentEditable);
+        if ((e.ctrlKey || e.metaKey) && (e.key === "s" || e.key === "S" || e.key === "Enter")) {
+          e.preventDefault();
+          el("saveBtn").click();
+          return;
+        }
+        if (typing) return;
+        if (e.key === "ArrowRight" || e.key === "n" || e.key === "k") { e.preventDefault(); navigateBy(1); return; }
+        if (e.key === "ArrowLeft" || e.key === "p" || e.key === "j") { e.preventDefault(); navigateBy(-1); return; }
+        if (!browseRelPath && !currentSampleId) return;
+        if (e.key === "s" || e.key === "S") { e.preventDefault(); setBinarySuccess("Success"); }
+        else if (e.key === "f" || e.key === "F") { e.preventDefault(); setBinarySuccess("Failure"); }
+      });
+
+      // Guard against losing unsaved edits on tab close / reload (#34).
+      window.addEventListener("beforeunload", (e) => {
+        if (isDirty) { e.preventDefault(); e.returnValue = ""; }
+      });
+
       el("backToTaskBtn").addEventListener("click", async () => {
         try {
           await jpost("/api/task/done", {});
