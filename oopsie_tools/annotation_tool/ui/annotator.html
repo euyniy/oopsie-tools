@@ -334,6 +334,23 @@
       .meta-key { font-size: 0.65rem; text-transform: uppercase; letter-spacing: 0.5px; color: #64748b; }
       .meta-val { font-size: 0.8rem; color: #cbd5e1; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; word-break: break-all; }
 
+      /* Episode data visualizer (#30) */
+      #episodeFields { margin-bottom: 16px; }
+      .episode-data { background: #0f172a; border: 1px solid #334155; border-radius: 6px; padding: 8px 12px; font-size: 0.8rem; }
+      .episode-data summary { cursor: pointer; color: #94a3b8; font-weight: 600; }
+      .ef-section { margin-top: 10px; }
+      .ef-section-title { font-size: 0.66rem; text-transform: uppercase; letter-spacing: 0.5px; color: #64748b; margin-bottom: 3px; }
+      .ef-row { display: flex; gap: 10px; padding: 1px 0; }
+      .ef-key { flex: 0 0 42%; color: #94a3b8; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; word-break: break-word; }
+      .ef-val { flex: 1; color: #cbd5e1; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; word-break: break-word; }
+
+      /* Editable task instruction (#31) */
+      .link-btn { background: none; border: none; color: #60a5fa; font-size: 0.7rem; padding: 0 0 0 6px; font-weight: 600; cursor: pointer; }
+      .link-btn:hover { background: none; text-decoration: underline; }
+      #instrEditRow input { margin-bottom: 6px; }
+      #instrEditRow .instr-btns { display: flex; gap: 6px; }
+      #instrEditRow .instr-btns button { padding: 6px 10px; font-size: 0.85rem; }
+
       /* Questionnaire container */
       #questionnaire h3 { margin-bottom: 12px; }
 
@@ -434,10 +451,18 @@
         <div class="form-section">
           <div class="form-scroll">
             <div class="task-instruction-box">
-              <div class="task-instruction-box-label">Task instruction</div>
+              <div class="task-instruction-box-label">Task instruction<button id="editInstrBtn" class="link-btn" type="button" style="display:none;" title="Edit this episode's task instruction">edit</button></div>
               <div class="task-instruction-box-value" id="sessionTaskInstruction">—</div>
+              <div id="instrEditRow" style="display:none; margin-top:8px;">
+                <input id="instrEditInput" type="text" placeholder="Task instruction" />
+                <div class="instr-btns">
+                  <button id="instrSaveBtn" class="primary" type="button">Save instruction</button>
+                  <button id="instrCancelBtn" type="button">Cancel</button>
+                </div>
+              </div>
             </div>
             <div id="metadataPanel" style="display:none;"></div>
+            <div id="episodeFields" style="display:none;"></div>
             <div id="questionnaire"></div>
           </div>
           <div class="save-bar" id="saveBar">
@@ -511,6 +536,10 @@
           fileEl.title = fileTitle;
         }
         if (taskEl) taskEl.textContent = task;
+        // The task instruction is only editable for a selected HDF5 episode (#31).
+        const editBtn = el("editInstrBtn");
+        if (editBtn) editBtn.style.display = browseRelPath ? "" : "none";
+        if (!browseRelPath) el("instrEditRow").style.display = "none";
       }
 
       async function jget(url) {
@@ -542,6 +571,7 @@
           el("saveBar").style.display = "";
         } else {
           el("metadataPanel").style.display = "none";
+          el("episodeFields").style.display = "none";
           el("questionnaire").style.display = "none";
           el("saveBar").style.display = "none";
         }
@@ -676,6 +706,51 @@
               ${extraRows.map(r => `<div class="meta-item"><span class="meta-key">${r.k}</span><span class="meta-val">${r.v}</span></div>`).join("")}
             </div>
           </div>`;
+        panel.style.display = "";
+      }
+
+      // ── Episode data visualizer (#30) ──────────────────────────────────────
+      function escHtml(s) {
+        return String(s ?? "")
+          .replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;")
+          .replaceAll('"', "&quot;").replaceAll("'", "&#39;");
+      }
+      function fmtFieldVal(v) {
+        if (v == null) return "";
+        if (Array.isArray(v)) return v.map(fmtFieldVal).join(", ");
+        if (typeof v === "object") return JSON.stringify(v);
+        return String(v);
+      }
+      function renderEpisodeFields(fields) {
+        const panel = el("episodeFields");
+        if (!panel) return;
+        if (!fields || typeof fields !== "object" || !Object.keys(fields).length) {
+          panel.style.display = "none";
+          panel.innerHTML = "";
+          return;
+        }
+        const kvRows = (obj) => Object.entries(obj || {})
+          .map(([k, v]) => `<div class="ef-row"><span class="ef-key">${escHtml(k)}</span><span class="ef-val">${escHtml(fmtFieldVal(v))}</span></div>`)
+          .join("");
+        const dsRows = (obj) => Object.entries(obj || {})
+          .map(([k, v]) => {
+            const shape = Array.isArray(v && v.shape) ? `[${v.shape.join(", ")}]` : "scalar";
+            const empty = v && v.empty ? "  (empty)" : "";
+            return `<div class="ef-row"><span class="ef-key">${escHtml(k)}</span><span class="ef-val">${escHtml(shape)} · ${escHtml(String((v && v.dtype) || ""))}${escHtml(empty)}</span></div>`;
+          }).join("");
+        const section = (title, body) => body ? `<div class="ef-section"><div class="ef-section-title">${escHtml(title)}</div>${body}</div>` : "";
+        const nStates = Object.keys(fields.robot_states || {}).length;
+        const nActions = Object.values(fields.actions || {}).filter((a) => a && !a.empty).length;
+        panel.innerHTML = `
+          <details class="episode-data">
+            <summary>Episode data — ${nStates} state · ${nActions} action key(s)</summary>
+            ${section("Attributes", kvRows(fields.attributes))}
+            ${section("Robot profile", kvRows(fields.robot_profile))}
+            ${section("observations/robot_states (shape · dtype)", dsRows(fields.robot_states))}
+            ${section("actions (shape · dtype)", dsRows(fields.actions))}
+            ${section("observations/video_paths", kvRows(fields.video_paths))}
+            ${section("Other", kvRows({ trajectory_length: fields.trajectory_length, annotators: (fields.annotators || []).join(", ") }))}
+          </details>`;
         panel.style.display = "";
       }
 
@@ -1157,6 +1232,7 @@
         currentBrowseSample = null;
         questionnaireRenderedFor = null;
         videosRenderedFor = null;
+        el("instrEditRow").style.display = "none"; // never carry an open edit onto another episode (#31)
         renderH5List();
         await refresh();
         prefetchNeighbors(relPath).catch(() => {});
@@ -1166,6 +1242,7 @@
         browseRelPath = null;
         currentBrowseSample = null;
         el("saveMsg").textContent = "";
+        el("instrEditRow").style.display = "none";
         questionnaireRenderedFor = null;
         videosRenderedFor = null;
         renderH5List();
@@ -1193,6 +1270,7 @@
 
             if (videosRenderedFor !== browseRelPath) {
               renderVideos(currentBrowseSample?.video_urls || {});
+              renderEpisodeFields(currentBrowseSample?.episode_fields || null);
               videosRenderedFor = browseRelPath;
             }
             if (questionnaireRenderedFor !== browseRelPath) {
@@ -1208,6 +1286,7 @@
           showOnly("annotateCard");
           if (videosRenderedFor !== "__browse_landing__") {
             renderVideos({});
+            renderEpisodeFields(null);
             videosRenderedFor = "__browse_landing__";
           }
           if (questionnaireRenderedFor !== "__browse_landing__") {
@@ -1233,6 +1312,7 @@
 
           if (videosRenderedFor !== browseRelPath) {
             renderVideos(currentBrowseSample?.video_urls || {});
+            renderEpisodeFields(currentBrowseSample?.episode_fields || null);
             videosRenderedFor = browseRelPath;
           }
           if (questionnaireRenderedFor !== browseRelPath) {
@@ -1273,6 +1353,7 @@
           // Render videos only when the sample changes.
           if (nextSampleId && videosRenderedFor !== nextSampleId) {
             renderVideos(cs.video_urls || {});
+            renderEpisodeFields(null);
             videosRenderedFor = nextSampleId;
           }
 
@@ -1356,6 +1437,39 @@
       el("prevBtn").addEventListener("click", () => navigateBy(-1));
       el("nextBtn").addEventListener("click", () => navigateBy(1));
 
+      // Editable task instruction (#31)
+      el("editInstrBtn").addEventListener("click", () => {
+        if (!browseRelPath) return;
+        const cur = String(currentBrowseSample?.metadata?.language_instruction || "").trim();
+        el("instrEditInput").value = cur;
+        el("instrEditRow").style.display = "";
+        el("instrEditInput").focus();
+      });
+      el("instrCancelBtn").addEventListener("click", () => { el("instrEditRow").style.display = "none"; });
+      el("instrSaveBtn").addEventListener("click", async () => {
+        if (!browseRelPath) return;
+        const val = el("instrEditInput").value.trim();
+        if (!val) { alert("Instruction cannot be empty."); return; }
+        el("instrSaveBtn").disabled = true;
+        try {
+          await jpost(`/api/h5/instruction?path=${encodeURIComponent(browseRelPath)}`, { instruction: val });
+          if (currentBrowseSample && currentBrowseSample.metadata) {
+            currentBrowseSample.metadata.language_instruction = val;
+          }
+          if (currentBrowseSample && currentBrowseSample.episode_fields && currentBrowseSample.episode_fields.attributes) {
+            currentBrowseSample.episode_fields.attributes.language_instruction = val;
+            renderEpisodeFields(currentBrowseSample.episode_fields); // keep the data panel in sync
+          }
+          el("sessionTaskInstruction").textContent = val;
+          sampleCache.delete(browseRelPath); // cached sample now has a stale instruction
+          el("instrEditRow").style.display = "none";
+        } catch (e) {
+          alert(String(e));
+        } finally {
+          el("instrSaveBtn").disabled = false;
+        }
+      });
+
       // Dirty tracking: any real edit flips the indicator and clears stale messages (#34).
       el("questionnaire").addEventListener("input", () => { setDirty(true); el("saveMsg").textContent = ""; });
       el("questionnaire").addEventListener("change", () => { setDirty(true); el("saveMsg").textContent = ""; });
@@ -1392,6 +1506,19 @@
       // are ignored while typing in a field.
       document.addEventListener("keydown", (e) => {
         const t = e.target;
+        // The instruction editor owns Enter=save / Esc=cancel / Ctrl+S=save (#31), so its
+        // keys never fall through to the questionnaire save hotkey (which would save the
+        // annotation and auto-advance, silently discarding the typed instruction).
+        if (t === el("instrEditInput")) {
+          if (e.key === "Enter" || ((e.ctrlKey || e.metaKey) && (e.key === "s" || e.key === "S"))) {
+            e.preventDefault();
+            el("instrSaveBtn").click();
+          } else if (e.key === "Escape") {
+            e.preventDefault();
+            el("instrCancelBtn").click();
+          }
+          return;
+        }
         const typing = t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.tagName === "SELECT" || t.isContentEditable);
         if ((e.ctrlKey || e.metaKey) && (e.key === "s" || e.key === "S" || e.key === "Enter")) {
           e.preventDefault();

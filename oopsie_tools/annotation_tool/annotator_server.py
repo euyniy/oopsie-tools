@@ -477,6 +477,63 @@ def _h5_annotation_tick_level(h5f: h5py.File, annotator_name: str) -> int:
     return 0
 
 
+def _dataset_summary(ds: h5py.Dataset) -> dict[str, Any]:
+    """Shape/dtype summary for a dataset, tolerant of ``h5py.Empty`` (null) datasets."""
+    shape = ds.shape
+    is_tuple = isinstance(shape, tuple)
+    empty = shape is None or (is_tuple and (len(shape) == 0 or 0 in shape))
+    return {
+        "shape": list(shape) if is_tuple else None,
+        "dtype": str(ds.dtype),
+        "empty": bool(empty),
+    }
+
+
+def _summarize_episode_fields(h5f: h5py.File) -> dict[str, Any]:
+    """Compact, read-only summary of everything logged in an episode (issue #30).
+
+    Reads only attrs + dataset shapes/dtypes (no array or video decoding) so the
+    annotator can double-check that all fields were captured correctly.
+    """
+    attr_keys = ("schema", "episode_id", "operator_name", "lab_id", "language_instruction", "timestamp")
+    fields: dict[str, Any] = {
+        "attributes": {k: _read_h5_attr(h5f, k, "") for k in attr_keys},
+        "robot_profile": _parse_taxonomy_json(_read_h5_attr(h5f, "robot_profile", "")),
+        "robot_states": {},
+        "actions": {},
+        "video_paths": {},
+    }
+
+    obs = h5f.get("observations")
+    if isinstance(obs, h5py.Group):
+        rs = obs.get("robot_states")
+        if isinstance(rs, h5py.Group):
+            for key in rs.keys():
+                if isinstance(rs[key], h5py.Dataset):
+                    fields["robot_states"][key] = _dataset_summary(rs[key])
+        vp = obs.get("video_paths")
+        if isinstance(vp, h5py.Group):
+            for cam in vp.keys():
+                try:
+                    fields["video_paths"][cam] = _decode_h5_value(vp[cam][()])
+                except Exception:
+                    continue
+
+    ag = h5f.get("actions")
+    if isinstance(ag, h5py.Group):
+        for key in ag.keys():
+            if isinstance(ag[key], h5py.Dataset):
+                fields["actions"][key] = _dataset_summary(ag[key])
+
+    fields["trajectory_length"] = next(
+        (s["shape"][0] for s in fields["robot_states"].values() if s.get("shape")),
+        None,
+    )
+    ea = h5f.get("episode_annotations")
+    fields["annotators"] = list(ea.keys()) if isinstance(ea, h5py.Group) else []
+    return fields
+
+
 @app.get("/api/h5/list")
 def api_h5_list():
     rt = _get_runtime()
@@ -518,6 +575,7 @@ def api_h5_sample():
 
     video_urls: dict[str, str] = {}
     existing_annotation: dict[str, Any] = {}
+    episode_fields: dict[str, Any] = {}
     metadata: dict[str, Any] = {
         "rel_path": h5_path.resolve().relative_to(samples_root).as_posix()
     }
@@ -528,6 +586,7 @@ def api_h5_sample():
         )
         metadata["episode_id"] = str(_read_h5_attr(h5f, "episode_id", "")) or ""
         metadata["operator_name"] = str(_read_h5_attr(h5f, "operator_name", "")) or ""
+        episode_fields = _summarize_episode_fields(h5f)
 
         ea = h5f.get("episode_annotations")
         if isinstance(ea, h5py.Group):
@@ -573,6 +632,7 @@ def api_h5_sample():
             "metadata": metadata,
             "video_urls": video_urls,
             "existing_annotation": existing_annotation,
+            "episode_fields": episode_fields,
         }
     )
 
@@ -624,6 +684,31 @@ def api_h5_save_annotation():
         return jsonify({"error": f"could not update annotation: {e}"}), 500
 
     return jsonify({"status": "saved", "annotation": ann})
+
+
+@app.post("/api/h5/instruction")
+def api_h5_set_instruction():
+    """Overwrite an episode's ``language_instruction`` root attr (issue #31)."""
+    rt = _get_runtime()
+    samples_root = rt.cfg.samples_dir.resolve()
+    try:
+        h5_path = _safe_h5_path_from_query(samples_root)
+    except H5PathError as e:
+        return jsonify({"error": e.message}), e.status
+
+    instruction = str(_json_payload().get("instruction", "")).strip()
+    if not instruction:
+        return jsonify({"error": "instruction is required"}), 400
+
+    try:
+        with h5py.File(h5_path, "r+") as f:
+            f.attrs["language_instruction"] = instruction
+    except OSError as e:
+        return jsonify({"error": f"could not write HDF5: {e}"}), 500
+    except Exception as e:
+        return jsonify({"error": f"could not update instruction: {e}"}), 500
+
+    return jsonify({"status": "saved", "language_instruction": instruction})
 
 
 TEMPLATE_DIR = Path(__file__).parent / "ui"

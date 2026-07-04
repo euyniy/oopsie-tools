@@ -65,3 +65,42 @@ def test_video_urls_resolved_for_flat_layout(client, tmp_path: Path) -> None:
     data = _get_sample(client, "flat.h5")
 
     assert "front" in data["video_urls"]
+
+
+def test_sample_returns_episode_fields(client, tmp_path: Path) -> None:
+    """/api/h5/sample summarizes all logged fields for the visualizer (#30)."""
+    write_valid_episode(tmp_path, stem="ep")
+
+    fields = _get_sample(client, "ep.h5")["episode_fields"]
+
+    assert fields["attributes"]["lab_id"] == "test_lab"
+    assert fields["robot_profile"]["policy_name"] == "test_policy"
+    assert fields["robot_states"]["joint_position"]["shape"] == [20, 7]
+    assert fields["robot_states"]["joint_position"]["empty"] is False
+    # Unused action keys are stored as h5py.Empty and flagged empty.
+    assert fields["actions"]["joint_velocity"]["empty"] is False
+    assert fields["actions"]["cartesian_position"]["empty"] is True
+    assert fields["trajectory_length"] == 20
+
+
+def test_set_instruction_persists(client, tmp_path: Path) -> None:
+    """POST /api/h5/instruction overwrites the language_instruction attr (#31)."""
+    write_valid_episode(tmp_path, stem="ep")
+
+    resp = client.post(
+        "/api/h5/instruction?path=ep.h5",
+        json={"instruction": "pour the water carefully"},
+    )
+    assert resp.status_code == 200, resp.data
+
+    data = _get_sample(client, "ep.h5")
+    assert data["metadata"]["language_instruction"] == "pour the water carefully"
+    assert data["episode_fields"]["attributes"]["language_instruction"] == "pour the water carefully"
+
+
+def test_set_instruction_rejects_empty(client, tmp_path: Path) -> None:
+    write_valid_episode(tmp_path, stem="ep")
+
+    resp = client.post("/api/h5/instruction?path=ep.h5", json={"instruction": "  "})
+
+    assert resp.status_code == 400
