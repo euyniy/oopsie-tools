@@ -150,6 +150,24 @@
         text-transform: uppercase;
         letter-spacing: 0.5px;
       }
+      .video-controls {
+        display: flex;
+        align-items: center;
+        gap: 16px;
+        margin-bottom: 12px;
+        flex-wrap: wrap;
+      }
+      .video-controls label {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        margin: 0;
+        font-weight: 500;
+        font-size: 0.85rem;
+        color: #cbd5e1;
+      }
+      .video-controls select { width: auto; padding: 5px 8px; }
+      .video-controls input[type="checkbox"] { width: 16px; height: 16px; }
 
       /* Right: questionnaire (styled like form-section) */
       .form-section {
@@ -398,6 +416,17 @@
           </div>
 
           <div id="annotateCard" style="display:none;">
+            <div class="video-controls">
+              <label>Speed
+                <select id="playbackRateSel">
+                  <option value="1">1×</option>
+                  <option value="1.5">1.5×</option>
+                  <option value="2">2×</option>
+                  <option value="4">4×</option>
+                </select>
+              </label>
+              <label title="Seek/play/pause one video and the others follow"><input type="checkbox" id="syncVideosChk" /> Sync videos</label>
+            </div>
             <div class="videos-grid" id="videosRow"></div>
           </div>
         </div>
@@ -518,6 +547,83 @@
         }
       }
 
+      // ── Video controls: playback speed (#32), sync scrubbing (#25), prefetch (#28) ──
+      const RATE_KEY = "oopsie_playback_rate";
+      const SYNC_KEY = "oopsie_sync_videos";
+
+      function getVideos() {
+        return Array.from(el("videosRow").querySelectorAll("video"));
+      }
+      function getPlaybackRate() {
+        const v = parseFloat(localStorage.getItem(RATE_KEY) || "1");
+        return Number.isFinite(v) && v > 0 ? v : 1;
+      }
+      function applyPlaybackRate(rate) {
+        getVideos().forEach((v) => { v.playbackRate = rate; });
+      }
+      function syncEnabled() {
+        const chk = el("syncVideosChk");
+        return chk ? chk.checked : false;
+      }
+      function attachSyncHandlers(v) {
+        // Mirror play/pause STATE only (no currentTime write) so staggered muted-autoplay
+        // 'play' events cannot yank each other back to 0. play()/pause() on an element
+        // already in that state fires no event, so these self-terminate. Only an explicit
+        // seek mirrors currentTime, and each mirrored write is tagged (__mirroredSeek) so
+        // the target's own async 'seeked' does not echo back — which also stops an
+        // unequal-length clip's clamped seek from dragging the others.
+        v.addEventListener("play", () => {
+          if (!syncEnabled()) return;
+          getVideos().forEach((o) => { if (o !== v) o.play().catch(() => {}); });
+        });
+        v.addEventListener("pause", () => {
+          if (!syncEnabled()) return;
+          getVideos().forEach((o) => { if (o !== v) o.pause(); });
+        });
+        v.addEventListener("seeked", () => {
+          if (!syncEnabled()) return;
+          if (v.__mirroredSeek) { v.__mirroredSeek = false; return; }
+          getVideos().forEach((o) => {
+            if (o === v) return;
+            if (Math.abs(o.currentTime - v.currentTime) <= 0.05) return; // already aligned
+            o.__mirroredSeek = true;
+            o.currentTime = v.currentTime;
+          });
+        });
+      }
+
+      const sampleCache = new Map();      // relPath -> /api/h5/sample JSON (#28)
+      const prefetchedVideos = new Set(); // video URLs already <link rel=prefetch>'d
+      const PREFETCH_COUNT = 2;
+      async function fetchSampleCached(relPath) {
+        if (sampleCache.has(relPath)) return sampleCache.get(relPath);
+        const s = await jget(`/api/h5/sample?path=${encodeURIComponent(relPath)}`);
+        if (s && !s.error) sampleCache.set(relPath, s); // never cache an error response
+        return s;
+      }
+      function prefetchVideoUrl(url) {
+        if (!url || prefetchedVideos.has(url)) return;
+        prefetchedVideos.add(url);
+        const link = document.createElement("link");
+        link.rel = "prefetch";
+        link.as = "video";
+        link.href = url;
+        document.head.appendChild(link);
+      }
+      async function prefetchNeighbors(relPath) {
+        const order = window.__flatFileOrder || [];
+        const idx = order.indexOf(relPath);
+        if (idx < 0) return;
+        for (let i = 1; i <= PREFETCH_COUNT; i++) {
+          const nrel = order[idx + i];
+          if (!nrel) break;
+          try {
+            const s = await fetchSampleCached(nrel);
+            Object.values(s.video_urls || {}).forEach(prefetchVideoUrl);
+          } catch (e) { /* ignore prefetch failures */ }
+        }
+      }
+
       function renderVideos(videoUrls) {
         const row = el("videosRow");
         row.innerHTML = "";
@@ -527,11 +633,17 @@
           wrap.innerHTML = `
             <div class="video-card">
               <div class="video-label">${String(cam)} view</div>
-              <video controls preload="metadata" src="${url}"></video>
+              <video controls muted autoplay playsinline preload="auto" src="${url}"></video>
             </div>
           `;
           row.appendChild(wrap);
         }
+        const rate = getPlaybackRate();
+        getVideos().forEach((v) => {
+          v.playbackRate = rate;
+          v.addEventListener("loadedmetadata", () => { v.playbackRate = getPlaybackRate(); });
+          attachSyncHandlers(v);
+        });
       }
 
       function renderMetadata(meta) {
@@ -1047,6 +1159,7 @@
         videosRenderedFor = null;
         renderH5List();
         await refresh();
+        prefetchNeighbors(relPath).catch(() => {});
       }
 
       function clearBrowse() {
@@ -1072,7 +1185,7 @@
             showOnly("annotateCard");
 
             if (!currentBrowseSample || currentBrowseSample.rel_path !== browseRelPath) {
-              const sample = await jget(`/api/h5/sample?path=${encodeURIComponent(browseRelPath)}`);
+              const sample = await fetchSampleCached(browseRelPath);
               currentBrowseSample = sample;
               questionnaireRenderedFor = null;
               videosRenderedFor = null;
@@ -1112,7 +1225,7 @@
           showOnly("annotateCard");
 
           if (!currentBrowseSample || currentBrowseSample.rel_path !== browseRelPath) {
-            const sample = await jget(`/api/h5/sample?path=${encodeURIComponent(browseRelPath)}`);
+            const sample = await fetchSampleCached(browseRelPath);
             currentBrowseSample = sample;
             questionnaireRenderedFor = null;
             videosRenderedFor = null;
@@ -1219,6 +1332,7 @@
         try {
           if (browseRelPath) {
             await jpost(`/api/h5/annotations?path=${encodeURIComponent(browseRelPath)}`, answers);
+            sampleCache.delete(browseRelPath); // cached sample now has a stale annotation
           } else {
             await jpost("/api/annotations", { sample_id: currentSampleId, ...answers });
           }
@@ -1254,6 +1368,24 @@
         const saved = localStorage.getItem(KEY);
         chk.checked = saved === null ? true : saved === "1";
         chk.addEventListener("change", () => localStorage.setItem(KEY, chk.checked ? "1" : "0"));
+      })();
+
+      // Persisted video controls: playback speed (#32) + sync toggle (#25).
+      (function initVideoControls() {
+        const rateSel = el("playbackRateSel");
+        if (rateSel) {
+          const stored = String(getPlaybackRate());
+          if ([...rateSel.options].some((o) => o.value === stored)) rateSel.value = stored;
+          rateSel.addEventListener("change", () => {
+            localStorage.setItem(RATE_KEY, rateSel.value);
+            applyPlaybackRate(parseFloat(rateSel.value) || 1);
+          });
+        }
+        const syncChk = el("syncVideosChk");
+        if (syncChk) {
+          syncChk.checked = localStorage.getItem(SYNC_KEY) === "1";
+          syncChk.addEventListener("change", () => localStorage.setItem(SYNC_KEY, syncChk.checked ? "1" : "0"));
+        }
       })();
 
       // Keyboard shortcuts (#33). Ctrl/Cmd+S / Ctrl/Cmd+Enter always save; the rest
