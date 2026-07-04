@@ -13,6 +13,7 @@ from pathlib import Path
 import h5py
 import pytest
 
+from oopsie_tools.annotation_tool.annotation_schema import write_annotation_attrs
 from oopsie_tools.annotation_tool.annotator_server import app, configure_runtime
 from oopsie_tools.test.fixtures.make_valid import (
     _write_base_h5,
@@ -104,3 +105,80 @@ def test_set_instruction_rejects_empty(client, tmp_path: Path) -> None:
     resp = client.post("/api/h5/instruction?path=ep.h5", json={"instruction": "  "})
 
     assert resp.status_code == 400
+
+
+def test_save_success_category_roundtrip(client, tmp_path: Path) -> None:
+    """A qualified success stores success_category in the taxonomy and reads back (#29)."""
+    write_valid_episode(tmp_path, stem="ep")
+
+    resp = client.post(
+        "/api/h5/annotations?path=ep.h5",
+        json={
+            "binary_success": "Success",
+            "success_category": "Success with side-effects",
+            "severity": "Low severity - no damage, can be reset and reattempted",
+            "failure_category": [],
+            "failure_description": "",
+            "additional_notes": "clipped a nearby cup",
+        },
+    )
+    assert resp.status_code == 200, resp.data
+
+    data = _get_sample(client, "ep.h5")
+    assert data["metadata"]["success"] == 1.0
+    ann = data["existing_annotation"]
+    assert ann["binary_success"] == "Success"
+    assert ann["success_category"] == "Success with side-effects"
+    assert ann["severity"].startswith("Low severity")
+
+
+def test_recent_annotations_returns_distinct(client, tmp_path: Path) -> None:
+    """/api/annotations/recent surfaces the annotator's distinct prior labels (#27)."""
+    write_valid_episode(tmp_path, stem="a")  # success by test_annotator
+    write_valid_episode(tmp_path, stem="b")
+    client.post(
+        "/api/h5/annotations?path=b.h5",
+        json={
+            "binary_success": "Failure",
+            "failure_category": ["Other"],
+            "failure_description": "dropped the object",
+            "severity": "Low severity - no damage, can be reset and reattempted",
+        },
+    )
+
+    items = client.get("/api/annotations/recent?limit=10").get_json()
+    kinds = {i["binary_success"] for i in items}
+
+    assert "Success" in kinds and "Failure" in kinds
+
+
+def test_list_reports_other_human_annotator(client, tmp_path: Path) -> None:
+    """api_h5_list flags episodes annotated by a different human (#26)."""
+    write_valid_episode(tmp_path, stem="ep")  # annotated by test_annotator
+    with h5py.File(tmp_path / "ep.h5", "r+") as f:
+        g = f["episode_annotations"].require_group("someone_else")
+        write_annotation_attrs(
+            g,
+            {
+                "binary_success": "Failure",
+                "source": "human",
+                "failure_category": ["Other"],
+                "failure_description": "x",
+                "severity": "Low severity - no damage, can be reset and reattempted",
+            },
+        )
+
+    entry = next(e for e in client.get("/api/h5/list").get_json() if e["rel_path"] == "ep.h5")
+    assert entry["annotated_by_others"] is True
+
+
+def test_list_ignores_nonhuman_annotator(client, tmp_path: Path) -> None:
+    """VLM/automated subgroups do not count as 'another annotator' (#26)."""
+    write_valid_episode(tmp_path, stem="ep")
+    with h5py.File(tmp_path / "ep.h5", "r+") as f:
+        g = f["episode_annotations"].require_group("cosmos-7b")
+        g.attrs["source"] = "cosmos-7b"
+        g.attrs["success"] = 0.0
+
+    entry = next(e for e in client.get("/api/h5/list").get_json() if e["rel_path"] == "ep.h5")
+    assert entry["annotated_by_others"] is False
