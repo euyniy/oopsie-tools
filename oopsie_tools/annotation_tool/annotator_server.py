@@ -34,6 +34,7 @@ import yaml
 from flask import Flask, abort, jsonify, request, send_file
 
 from oopsie_tools.annotation_tool import QUESTIONNAIRE_PATH
+from oopsie_tools.annotation_tool.annotation_schema import write_annotation_attrs
 
 app = Flask(__name__)
 
@@ -414,6 +415,9 @@ def _read_existing_annotation_dict(ea: h5py.Group, annotator_name: str) -> dict[
         sev = tax.get("severity")
         if sev is not None:
             existing_annotation["severity"] = str(sev)
+        sc = tax.get("success_category")
+        if sc is not None:
+            existing_annotation["success_category"] = str(sc)
 
     if not existing_annotation:
         raw_failure = _read_h5_attr(ea, "failure_annotation", "")
@@ -534,6 +538,25 @@ def _summarize_episode_fields(h5f: h5py.File) -> dict[str, Any]:
     return fields
 
 
+def _has_other_human_annotation(h5f: h5py.File, annotator_name: str) -> bool:
+    """Whether a human other than ``annotator_name`` has annotated this episode (#26)."""
+    ea = h5f.get("episode_annotations")
+    if not isinstance(ea, h5py.Group):
+        return False
+    for name in ea.keys():
+        if name == annotator_name:
+            continue
+        sub = ea[name]
+        if not isinstance(sub, h5py.Group):
+            continue
+        source = str(_read_h5_attr(sub, "source", "") or "").strip().lower()
+        if source and source != "human":
+            continue  # VLM / automated annotators don't count as "another annotator"
+        if _annotator_subgroup_looks_annotated(sub):
+            return True
+    return False
+
+
 @app.get("/api/h5/list")
 def api_h5_list():
     rt = _get_runtime()
@@ -544,11 +567,14 @@ def api_h5_list():
             continue
         rel = p.resolve().relative_to(root).as_posix()
         tick_level = 0
+        others = False
         try:
             with h5py.File(p, "r") as h5f:
                 tick_level = _h5_annotation_tick_level(h5f, rt.cfg.annotator_name)
+                others = _has_other_human_annotation(h5f, rt.cfg.annotator_name)
         except Exception:
             tick_level = 0
+            others = False
         annotated = tick_level >= 1
         entries.append(
             {
@@ -558,10 +584,63 @@ def api_h5_list():
                 "mtime": p.stat().st_mtime,
                 "annotated": annotated,
                 "annotation_tick_level": tick_level,
+                "annotated_by_others": others,
             }
         )
     entries.sort(key=lambda e: e.get("rel_path") or "")
     return jsonify(entries)
+
+
+@app.get("/api/annotations/recent")
+def api_recent_annotations():
+    """The current annotator's recent distinct annotations, for the autofill picker (#27)."""
+    rt = _get_runtime()
+    root = rt.cfg.samples_dir.resolve()
+    ann_name = rt.cfg.annotator_name
+    try:
+        limit = int(request.args.get("limit", 15))
+    except (TypeError, ValueError):
+        limit = 15
+    limit = max(1, min(limit, 100))
+
+    files = [p for p in root.rglob("*.h5") if p.is_file()]
+    files.sort(key=lambda p: p.stat().st_mtime, reverse=True)
+
+    seen: set[str] = set()
+    recent: list[dict[str, Any]] = []
+    for p in files:
+        if len(recent) >= limit:
+            break
+        try:
+            with h5py.File(p, "r") as h5f:
+                ea = h5f.get("episode_annotations")
+                if not isinstance(ea, h5py.Group):
+                    continue
+                # Only the current annotator's OWN subgroup — never the legacy
+                # episode-level failure_annotation fallback, which isn't
+                # annotator-scoped and could surface someone else's labels (#27).
+                if ann_name not in ea.keys() or not isinstance(ea[ann_name], h5py.Group):
+                    continue
+                ann = _read_existing_annotation_dict(ea, ann_name)
+        except Exception:
+            continue
+        if not ann or not str(ann.get("binary_success", "")).strip():
+            continue
+        key = json.dumps(
+            {
+                "binary_success": str(ann.get("binary_success", "")).strip(),
+                "success_category": str(ann.get("success_category", "")).strip(),
+                "failure_category": sorted(str(x) for x in (ann.get("failure_category") or [])),
+                "severity": str(ann.get("severity", "")).strip(),
+                "failure_description": str(ann.get("failure_description", "")).strip(),
+            },
+            sort_keys=True,
+        )
+        if key in seen:
+            continue
+        seen.add(key)
+        recent.append(ann)
+    return jsonify(recent)
 
 
 @app.get("/api/h5/sample")
@@ -652,32 +731,11 @@ def api_h5_save_annotation():
 
     ann = rt.save_annotation(sample_id=str(h5_path), payload=payload)
 
-    success: float | None = None
-    bs = str(ann.get("binary_success", "")).strip().lower()
-    if bs == "success":
-        success = 1.0
-    elif bs == "failure":
-        success = 0.0
-
     try:
         with h5py.File(h5_path, "r+") as f:
             ea = f.require_group("episode_annotations")
             ag = ea.require_group(ann["annotator"])
-            ag.attrs["schema"] = ann.get("schema", "oopsie_failure_taxonomy_v1")
-            ag.attrs["source"] = "human"
-            ag.attrs["timestamp"] = ann["annotated_at"]
-            if success is not None:
-                ag.attrs["success"] = float(success)
-            ag.attrs["failure_description"] = ann.get("failure_description", "")
-            ag.attrs["taxonomy_schema"] = "oopsiedata_taxonomy_schema_v1"
-            ag.attrs["taxonomy"] = json.dumps(
-                {
-                    "failure_category": ann.get("failure_category", []),
-                    "severity": ann.get("severity", ""),
-                },
-                ensure_ascii=False,
-            )
-            ag.attrs["additional_notes"] = ann.get("additional_notes", "")
+            write_annotation_attrs(ag, ann)
     except OSError as e:
         return jsonify({"error": f"could not write HDF5: {e}"}), 500
     except Exception as e:

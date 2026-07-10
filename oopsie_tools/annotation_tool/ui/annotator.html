@@ -267,6 +267,7 @@
       .tree-label { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
 
       .tick { color: #4ade80; font-weight: 800; }
+      .other-mark { color: #a78bfa; font-weight: 800; }
 
       /* Videos: equal sizing */
       /* Videos: vertical stack for larger size */
@@ -344,6 +345,11 @@
       .ef-key { flex: 0 0 42%; color: #94a3b8; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; word-break: break-word; }
       .ef-val { flex: 1; color: #cbd5e1; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; word-break: break-word; }
 
+      /* Autofill from a previous annotation (#27) */
+      #autofillRow { margin-bottom: 16px; }
+      .autofill-label { display: block; font-size: 0.8rem; color: #94a3b8; font-weight: 500; }
+      .autofill-label select { margin-top: 4px; }
+
       /* Editable task instruction (#31) */
       .link-btn { background: none; border: none; color: #60a5fa; font-size: 0.7rem; padding: 0 0 0 6px; font-weight: 600; cursor: pointer; }
       .link-btn:hover { background: none; text-decoration: underline; }
@@ -406,6 +412,7 @@
           <div class="h5-legend" aria-label="Annotation status icons">
             <div class="h5-legend-row"><span class="tick">✓</span> Only Success/failure Annotated (failure details incomplete).</div>
             <div class="h5-legend-row"><span class="tick">✓✓</span> Complete: Success/failure Annotated with description, category, and severity.</div>
+            <div class="h5-legend-row"><span class="other-mark">◆</span> Also annotated by another annotator.</div>
           </div>
           <input id="h5Search" class="h5-search" type="text" placeholder="Search…" />
           <div class="h5-nav">
@@ -463,6 +470,11 @@
             </div>
             <div id="metadataPanel" style="display:none;"></div>
             <div id="episodeFields" style="display:none;"></div>
+            <div id="autofillRow" style="display:none;">
+              <label class="autofill-label">Copy from a previous annotation
+                <select id="autofillSelect"><option value="">— select —</option></select>
+              </label>
+            </div>
             <div id="questionnaire"></div>
           </div>
           <div class="save-bar" id="saveBar">
@@ -569,9 +581,12 @@
         if (which === "annotateCard") {
           el("questionnaire").style.display = "";
           el("saveBar").style.display = "";
+          el("autofillRow").style.display =
+            (window.__recentAnnotations && window.__recentAnnotations.length) ? "" : "none";
         } else {
           el("metadataPanel").style.display = "none";
           el("episodeFields").style.display = "none";
+          el("autofillRow").style.display = "none";
           el("questionnaire").style.display = "none";
           el("saveBar").style.display = "none";
         }
@@ -752,6 +767,40 @@
             ${section("Other", kvRows({ trajectory_length: fields.trajectory_length, annotators: (fields.annotators || []).join(", ") }))}
           </details>`;
         panel.style.display = "";
+      }
+
+      // ── Autofill from a previous annotation (#27) ──────────────────────────
+      async function loadRecentAnnotations() {
+        try {
+          const items = await jget("/api/annotations/recent?limit=15");
+          window.__recentAnnotations = Array.isArray(items) ? items : [];
+        } catch (e) {
+          window.__recentAnnotations = [];
+        }
+        renderAutofillOptions();
+      }
+      function annotationSummaryLabel(a) {
+        const bs = String(a?.binary_success || "").trim() || "?";
+        if (bs === "Failure") {
+          const cats = (a.failure_category || []).join(", ");
+          const desc = String(a.failure_description || "").trim();
+          return `Failure — ${cats || "(no category)"}${desc ? ": " + desc.slice(0, 60) : ""}`;
+        }
+        const sc = String(a?.success_category || "").trim();
+        return `Success${sc ? " — " + sc : ""}`;
+      }
+      function renderAutofillOptions() {
+        const sel = el("autofillSelect");
+        const row = el("autofillRow");
+        if (!sel || !row) return;
+        const items = window.__recentAnnotations || [];
+        sel.innerHTML = items.length
+          ? '<option value="">— copy from a previous annotation —</option>' +
+            items.map((a, i) => `<option value="${i}">${escHtml(annotationSummaryLabel(a))}</option>`).join("")
+          : '<option value="">— select —</option>';
+        // Only surface the picker while annotating; showOnly also manages this.
+        const annotating = el("annotateCard").style.display !== "none";
+        row.style.display = (items.length && annotating) ? "" : "none";
       }
 
       function inputForQuestion(q) {
@@ -948,8 +997,14 @@
       }
 
       function validateSaveAnswers(answers) {
-        if (!String(answers?.binary_success ?? "").trim()) {
+        const bs = String(answers?.binary_success ?? "").trim();
+        if (!bs) {
           return "Please annotate success/failure.";
+        }
+        // The failure taxonomy trio is all-or-nothing, but only for failures — a
+        // (qualified) success may set severity/notes independently (#29).
+        if (bs !== "Failure") {
+          return "";
         }
         const categoryFilled =
           Array.isArray(answers?.failure_category) && answers.failure_category.length > 0;
@@ -962,16 +1017,31 @@
         return "";
       }
 
-      const FAILURE_ONLY_QUESTIONS = ["failure_category", "failure_description", "severity"];
+      function questionCurrentValue(id) {
+        const checked = document.querySelector(`input[type="radio"][name="${CSS.escape(id)}"]:checked`);
+        if (checked) return checked.value;
+        const other = document.querySelector(`[name="${CSS.escape(id)}"]`);
+        return other ? String(other.value ?? "") : "";
+      }
 
+      // Data-driven conditional visibility (#29): a question with
+      // `show_when: {binary_success: [...]}` is shown only when every referenced
+      // question currently holds one of the listed values. Questions without a
+      // `show_when` are always visible. Generalizes the old hard-coded failure hide.
       function applySuccessConditional() {
-        const selected = document.querySelector('input[type="radio"][name="binary_success"]:checked');
-        const isSuccess = selected && selected.value === "Success";
-        FAILURE_ONLY_QUESTIONS.forEach((id) => {
+        const qs = Array.isArray(window.__questionnaireSpec?.questions) ? window.__questionnaireSpec.questions : [];
+        for (const q of qs) {
+          const id = q.id || q.name || q.key;
+          const cond = q && q.show_when;
+          if (!id || !cond || typeof cond !== "object") continue;
           const group = document.querySelector(`[data-question-id="${CSS.escape(id)}"]`);
-          if (!group) return;
-          group.style.display = isSuccess ? "none" : "";
-        });
+          if (!group) continue;
+          const visible = Object.entries(cond).every(([depId, allowed]) => {
+            const vals = Array.isArray(allowed) ? allowed.map(String) : [String(allowed)];
+            return vals.includes(questionCurrentValue(depId));
+          });
+          group.style.display = visible ? "" : "none";
+        }
       }
 
       let currentSampleId = null; // rollout sample_id
@@ -1072,7 +1142,7 @@
           const items = await jget("/api/h5/list");
           const arr = Array.isArray(items) ? items : [];
           // Lightweight signature: rel_path + annotated + mtime.
-          const sig = arr.map(it => `${it.rel_path}|${Number(it.annotation_tick_level ?? 0)}|${it.mtime}`).join("\n");
+          const sig = arr.map(it => `${it.rel_path}|${Number(it.annotation_tick_level ?? 0)}|${it.annotated_by_others ? 1 : 0}|${it.mtime}`).join("\n");
           if (sig !== lastH5ListSig) {
             lastH5ListSig = sig;
             window.__h5Items = arr;
@@ -1155,11 +1225,14 @@
             const active = (browseRelPath === rp) ? "active" : "";
             const tl = Number(it.annotation_tick_level ?? 0);
             const tick = tl >= 2 ? "✓✓ " : tl >= 1 ? "✓ " : "";
+            const other = it.annotated_by_others
+              ? '<span class="other-mark" title="Also annotated by another annotator">◆</span> '
+              : "";
             const indent = depth * 14;
             lines.push(
               `<div class="tree-row ${active}" data-kind="file" data-rel="${esc(rp)}" style="margin-left:${indent}px;">` +
               `<span class="tree-arrow"></span>` +
-              `<span class="tree-label">${tick}${esc(it._fileName)}</span>` +
+              `<span class="tree-label">${other}${tick}${esc(it._fileName)}</span>` +
               `</div>`
             );
           }
@@ -1203,6 +1276,20 @@
         const ann = existing && typeof existing === "object" ? existing : {};
         const skip = new Set(["annotated_at", "annotator", "source"]);
         const qs = Array.isArray(window.__questionnaireSpec?.questions) ? window.__questionnaireSpec.questions : [];
+        // Reset every managed field first so applying a (possibly partial) annotation —
+        // e.g. copying a previous annotation onto an already-filled form (#27) — never
+        // leaves stale values (like a success_category) from a prior selection.
+        for (const q of qs) {
+          const id = q.id || q.name || q.key;
+          if (!id || skip.has(id)) continue;
+          const type = String(q.type || "text").toLowerCase();
+          if (type === "checkbox" || type === "radio") {
+            document.querySelectorAll(`input[name="${CSS.escape(id)}"]`).forEach((e) => { e.checked = false; });
+          } else {
+            const el0 = document.querySelector(`[name="${CSS.escape(id)}"]`);
+            if (el0) el0.value = "";
+          }
+        }
         for (const q of qs) {
           const id = q.id || q.name || q.key;
           if (!id || skip.has(id)) continue;
@@ -1420,6 +1507,7 @@
           el("saveMsg").textContent = "";
           markSaved();
           await pollH5List();
+          loadRecentAnnotations().catch(() => {}); // the just-saved annotation becomes copyable
           if (browseRelPath && autoAdvanceEnabled()) {
             await navigateBy(1);
           }
@@ -1446,6 +1534,18 @@
         el("instrEditInput").focus();
       });
       el("instrCancelBtn").addEventListener("click", () => { el("instrEditRow").style.display = "none"; });
+
+      // Autofill: copy a chosen previous annotation into the form (#27)
+      el("autofillSelect").addEventListener("change", () => {
+        const items = window.__recentAnnotations || [];
+        const idx = parseInt(el("autofillSelect").value, 10);
+        if (Number.isInteger(idx) && items[idx]) {
+          populateForm(items[idx]);
+          setDirty(true);
+          el("saveMsg").textContent = "Copied from a previous annotation — review and Save.";
+        }
+        el("autofillSelect").value = "";
+      });
       el("instrSaveBtn").addEventListener("click", async () => {
         if (!browseRelPath) return;
         const val = el("instrEditInput").value.trim();
@@ -1554,6 +1654,7 @@
       }
 
       loadH5List().catch(() => {});
+      loadRecentAnnotations().catch(() => {});
       if (typeof ANNOTATOR_BROWSE_ONLY === "undefined" || !ANNOTATOR_BROWSE_ONLY) {
         setInterval(() => refresh().catch(() => {}), 800);
         setInterval(() => pollH5List().catch(() => {}), 1500);
