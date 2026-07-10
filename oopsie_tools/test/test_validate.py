@@ -253,6 +253,27 @@ class TestValidateSessionDir:
 
 
 # ---------------------------------------------------------------------------
+# Better error messaging (#21)
+# ---------------------------------------------------------------------------
+
+
+class TestBetterErrors:
+    def test_validate_accepts_log_path(self, valid_success_episode, tmp_path):
+        # Regression: upload.py passes log_path to validate_h5_file for single files.
+        log_path = tmp_path / "validate.log"
+        assert validate_h5_file(str(valid_success_episode), log_path=str(log_path)) is True
+
+    def test_robot_state_joint_dof_message(self, invalid_fixtures):
+        with pytest.raises(
+            AssertionError, match="robot_state_joint_names count does not match"
+        ):
+            validate_h5_file(str(invalid_fixtures["invalid_joint_names_length_mismatch"]))
+
+    def test_action_joint_dof_message(self, invalid_fixtures):
+        with pytest.raises(
+            AssertionError, match="action_joint_names count does not match"
+        ):
+            validate_h5_file(str(invalid_fixtures["invalid_action_names_length_mismatch"]))
 # Annotation semantics (#29 qualified success, #26 multi/non-human annotators)
 # ---------------------------------------------------------------------------
 
