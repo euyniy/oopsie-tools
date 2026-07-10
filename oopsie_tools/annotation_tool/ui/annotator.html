@@ -150,6 +150,24 @@
         text-transform: uppercase;
         letter-spacing: 0.5px;
       }
+      .video-controls {
+        display: flex;
+        align-items: center;
+        gap: 16px;
+        margin-bottom: 12px;
+        flex-wrap: wrap;
+      }
+      .video-controls label {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        margin: 0;
+        font-weight: 500;
+        font-size: 0.85rem;
+        color: #cbd5e1;
+      }
+      .video-controls select { width: auto; padding: 5px 8px; }
+      .video-controls input[type="checkbox"] { width: 16px; height: 16px; }
 
       /* Right: questionnaire (styled like form-section) */
       .form-section {
@@ -249,6 +267,7 @@
       .tree-label { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
 
       .tick { color: #4ade80; font-weight: 800; }
+      .other-mark { color: #a78bfa; font-weight: 800; }
 
       /* Videos: equal sizing */
       /* Videos: vertical stack for larger size */
@@ -316,6 +335,28 @@
       .meta-key { font-size: 0.65rem; text-transform: uppercase; letter-spacing: 0.5px; color: #64748b; }
       .meta-val { font-size: 0.8rem; color: #cbd5e1; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; word-break: break-all; }
 
+      /* Episode data visualizer (#30) */
+      #episodeFields { margin-bottom: 16px; }
+      .episode-data { background: #0f172a; border: 1px solid #334155; border-radius: 6px; padding: 8px 12px; font-size: 0.8rem; }
+      .episode-data summary { cursor: pointer; color: #94a3b8; font-weight: 600; }
+      .ef-section { margin-top: 10px; }
+      .ef-section-title { font-size: 0.66rem; text-transform: uppercase; letter-spacing: 0.5px; color: #64748b; margin-bottom: 3px; }
+      .ef-row { display: flex; gap: 10px; padding: 1px 0; }
+      .ef-key { flex: 0 0 42%; color: #94a3b8; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; word-break: break-word; }
+      .ef-val { flex: 1; color: #cbd5e1; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; word-break: break-word; }
+
+      /* Autofill from a previous annotation (#27) */
+      #autofillRow { margin-bottom: 16px; }
+      .autofill-label { display: block; font-size: 0.8rem; color: #94a3b8; font-weight: 500; }
+      .autofill-label select { margin-top: 4px; }
+
+      /* Editable task instruction (#31) */
+      .link-btn { background: none; border: none; color: #60a5fa; font-size: 0.7rem; padding: 0 0 0 6px; font-weight: 600; cursor: pointer; }
+      .link-btn:hover { background: none; text-decoration: underline; }
+      #instrEditRow input { margin-bottom: 6px; }
+      #instrEditRow .instr-btns { display: flex; gap: 6px; }
+      #instrEditRow .instr-btns button { padding: 6px 10px; font-size: 0.85rem; }
+
       /* Questionnaire container */
       #questionnaire h3 { margin-bottom: 12px; }
 
@@ -371,6 +412,7 @@
           <div class="h5-legend" aria-label="Annotation status icons">
             <div class="h5-legend-row"><span class="tick">✓</span> Only Success/failure Annotated (failure details incomplete).</div>
             <div class="h5-legend-row"><span class="tick">✓✓</span> Complete: Success/failure Annotated with description, category, and severity.</div>
+            <div class="h5-legend-row"><span class="other-mark">◆</span> Also annotated by another annotator.</div>
           </div>
           <input id="h5Search" class="h5-search" type="text" placeholder="Search…" />
           <div class="h5-nav">
@@ -398,6 +440,17 @@
           </div>
 
           <div id="annotateCard" style="display:none;">
+            <div class="video-controls">
+              <label>Speed
+                <select id="playbackRateSel">
+                  <option value="1">1×</option>
+                  <option value="1.5">1.5×</option>
+                  <option value="2">2×</option>
+                  <option value="4">4×</option>
+                </select>
+              </label>
+              <label title="Seek/play/pause one video and the others follow"><input type="checkbox" id="syncVideosChk" /> Sync videos</label>
+            </div>
             <div class="videos-grid" id="videosRow"></div>
           </div>
         </div>
@@ -405,10 +458,23 @@
         <div class="form-section">
           <div class="form-scroll">
             <div class="task-instruction-box">
-              <div class="task-instruction-box-label">Task instruction</div>
+              <div class="task-instruction-box-label">Task instruction<button id="editInstrBtn" class="link-btn" type="button" style="display:none;" title="Edit this episode's task instruction">edit</button></div>
               <div class="task-instruction-box-value" id="sessionTaskInstruction">—</div>
+              <div id="instrEditRow" style="display:none; margin-top:8px;">
+                <input id="instrEditInput" type="text" placeholder="Task instruction" />
+                <div class="instr-btns">
+                  <button id="instrSaveBtn" class="primary" type="button">Save instruction</button>
+                  <button id="instrCancelBtn" type="button">Cancel</button>
+                </div>
+              </div>
             </div>
             <div id="metadataPanel" style="display:none;"></div>
+            <div id="episodeFields" style="display:none;"></div>
+            <div id="autofillRow" style="display:none;">
+              <label class="autofill-label">Copy from a previous annotation
+                <select id="autofillSelect"><option value="">— select —</option></select>
+              </label>
+            </div>
             <div id="questionnaire"></div>
           </div>
           <div class="save-bar" id="saveBar">
@@ -482,6 +548,10 @@
           fileEl.title = fileTitle;
         }
         if (taskEl) taskEl.textContent = task;
+        // The task instruction is only editable for a selected HDF5 episode (#31).
+        const editBtn = el("editInstrBtn");
+        if (editBtn) editBtn.style.display = browseRelPath ? "" : "none";
+        if (!browseRelPath) el("instrEditRow").style.display = "none";
       }
 
       async function jget(url) {
@@ -511,10 +581,91 @@
         if (which === "annotateCard") {
           el("questionnaire").style.display = "";
           el("saveBar").style.display = "";
+          el("autofillRow").style.display =
+            (window.__recentAnnotations && window.__recentAnnotations.length) ? "" : "none";
         } else {
           el("metadataPanel").style.display = "none";
+          el("episodeFields").style.display = "none";
+          el("autofillRow").style.display = "none";
           el("questionnaire").style.display = "none";
           el("saveBar").style.display = "none";
+        }
+      }
+
+      // ── Video controls: playback speed (#32), sync scrubbing (#25), prefetch (#28) ──
+      const RATE_KEY = "oopsie_playback_rate";
+      const SYNC_KEY = "oopsie_sync_videos";
+
+      function getVideos() {
+        return Array.from(el("videosRow").querySelectorAll("video"));
+      }
+      function getPlaybackRate() {
+        const v = parseFloat(localStorage.getItem(RATE_KEY) || "1");
+        return Number.isFinite(v) && v > 0 ? v : 1;
+      }
+      function applyPlaybackRate(rate) {
+        getVideos().forEach((v) => { v.playbackRate = rate; });
+      }
+      function syncEnabled() {
+        const chk = el("syncVideosChk");
+        return chk ? chk.checked : false;
+      }
+      function attachSyncHandlers(v) {
+        // Mirror play/pause STATE only (no currentTime write) so staggered muted-autoplay
+        // 'play' events cannot yank each other back to 0. play()/pause() on an element
+        // already in that state fires no event, so these self-terminate. Only an explicit
+        // seek mirrors currentTime, and each mirrored write is tagged (__mirroredSeek) so
+        // the target's own async 'seeked' does not echo back — which also stops an
+        // unequal-length clip's clamped seek from dragging the others.
+        v.addEventListener("play", () => {
+          if (!syncEnabled()) return;
+          getVideos().forEach((o) => { if (o !== v) o.play().catch(() => {}); });
+        });
+        v.addEventListener("pause", () => {
+          if (!syncEnabled()) return;
+          getVideos().forEach((o) => { if (o !== v) o.pause(); });
+        });
+        v.addEventListener("seeked", () => {
+          if (!syncEnabled()) return;
+          if (v.__mirroredSeek) { v.__mirroredSeek = false; return; }
+          getVideos().forEach((o) => {
+            if (o === v) return;
+            if (Math.abs(o.currentTime - v.currentTime) <= 0.05) return; // already aligned
+            o.__mirroredSeek = true;
+            o.currentTime = v.currentTime;
+          });
+        });
+      }
+
+      const sampleCache = new Map();      // relPath -> /api/h5/sample JSON (#28)
+      const prefetchedVideos = new Set(); // video URLs already <link rel=prefetch>'d
+      const PREFETCH_COUNT = 2;
+      async function fetchSampleCached(relPath) {
+        if (sampleCache.has(relPath)) return sampleCache.get(relPath);
+        const s = await jget(`/api/h5/sample?path=${encodeURIComponent(relPath)}`);
+        if (s && !s.error) sampleCache.set(relPath, s); // never cache an error response
+        return s;
+      }
+      function prefetchVideoUrl(url) {
+        if (!url || prefetchedVideos.has(url)) return;
+        prefetchedVideos.add(url);
+        const link = document.createElement("link");
+        link.rel = "prefetch";
+        link.as = "video";
+        link.href = url;
+        document.head.appendChild(link);
+      }
+      async function prefetchNeighbors(relPath) {
+        const order = window.__flatFileOrder || [];
+        const idx = order.indexOf(relPath);
+        if (idx < 0) return;
+        for (let i = 1; i <= PREFETCH_COUNT; i++) {
+          const nrel = order[idx + i];
+          if (!nrel) break;
+          try {
+            const s = await fetchSampleCached(nrel);
+            Object.values(s.video_urls || {}).forEach(prefetchVideoUrl);
+          } catch (e) { /* ignore prefetch failures */ }
         }
       }
 
@@ -527,11 +678,17 @@
           wrap.innerHTML = `
             <div class="video-card">
               <div class="video-label">${String(cam)} view</div>
-              <video controls preload="metadata" src="${url}"></video>
+              <video controls muted autoplay playsinline preload="auto" src="${url}"></video>
             </div>
           `;
           row.appendChild(wrap);
         }
+        const rate = getPlaybackRate();
+        getVideos().forEach((v) => {
+          v.playbackRate = rate;
+          v.addEventListener("loadedmetadata", () => { v.playbackRate = getPlaybackRate(); });
+          attachSyncHandlers(v);
+        });
       }
 
       function renderMetadata(meta) {
@@ -565,6 +722,85 @@
             </div>
           </div>`;
         panel.style.display = "";
+      }
+
+      // ── Episode data visualizer (#30) ──────────────────────────────────────
+      function escHtml(s) {
+        return String(s ?? "")
+          .replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;")
+          .replaceAll('"', "&quot;").replaceAll("'", "&#39;");
+      }
+      function fmtFieldVal(v) {
+        if (v == null) return "";
+        if (Array.isArray(v)) return v.map(fmtFieldVal).join(", ");
+        if (typeof v === "object") return JSON.stringify(v);
+        return String(v);
+      }
+      function renderEpisodeFields(fields) {
+        const panel = el("episodeFields");
+        if (!panel) return;
+        if (!fields || typeof fields !== "object" || !Object.keys(fields).length) {
+          panel.style.display = "none";
+          panel.innerHTML = "";
+          return;
+        }
+        const kvRows = (obj) => Object.entries(obj || {})
+          .map(([k, v]) => `<div class="ef-row"><span class="ef-key">${escHtml(k)}</span><span class="ef-val">${escHtml(fmtFieldVal(v))}</span></div>`)
+          .join("");
+        const dsRows = (obj) => Object.entries(obj || {})
+          .map(([k, v]) => {
+            const shape = Array.isArray(v && v.shape) ? `[${v.shape.join(", ")}]` : "scalar";
+            const empty = v && v.empty ? "  (empty)" : "";
+            return `<div class="ef-row"><span class="ef-key">${escHtml(k)}</span><span class="ef-val">${escHtml(shape)} · ${escHtml(String((v && v.dtype) || ""))}${escHtml(empty)}</span></div>`;
+          }).join("");
+        const section = (title, body) => body ? `<div class="ef-section"><div class="ef-section-title">${escHtml(title)}</div>${body}</div>` : "";
+        const nStates = Object.keys(fields.robot_states || {}).length;
+        const nActions = Object.values(fields.actions || {}).filter((a) => a && !a.empty).length;
+        panel.innerHTML = `
+          <details class="episode-data">
+            <summary>Episode data — ${nStates} state · ${nActions} action key(s)</summary>
+            ${section("Attributes", kvRows(fields.attributes))}
+            ${section("Robot profile", kvRows(fields.robot_profile))}
+            ${section("observations/robot_states (shape · dtype)", dsRows(fields.robot_states))}
+            ${section("actions (shape · dtype)", dsRows(fields.actions))}
+            ${section("observations/video_paths", kvRows(fields.video_paths))}
+            ${section("Other", kvRows({ trajectory_length: fields.trajectory_length, annotators: (fields.annotators || []).join(", ") }))}
+          </details>`;
+        panel.style.display = "";
+      }
+
+      // ── Autofill from a previous annotation (#27) ──────────────────────────
+      async function loadRecentAnnotations() {
+        try {
+          const items = await jget("/api/annotations/recent?limit=15");
+          window.__recentAnnotations = Array.isArray(items) ? items : [];
+        } catch (e) {
+          window.__recentAnnotations = [];
+        }
+        renderAutofillOptions();
+      }
+      function annotationSummaryLabel(a) {
+        const bs = String(a?.binary_success || "").trim() || "?";
+        if (bs === "Failure") {
+          const cats = (a.failure_category || []).join(", ");
+          const desc = String(a.failure_description || "").trim();
+          return `Failure — ${cats || "(no category)"}${desc ? ": " + desc.slice(0, 60) : ""}`;
+        }
+        const sc = String(a?.success_category || "").trim();
+        return `Success${sc ? " — " + sc : ""}`;
+      }
+      function renderAutofillOptions() {
+        const sel = el("autofillSelect");
+        const row = el("autofillRow");
+        if (!sel || !row) return;
+        const items = window.__recentAnnotations || [];
+        sel.innerHTML = items.length
+          ? '<option value="">— copy from a previous annotation —</option>' +
+            items.map((a, i) => `<option value="${i}">${escHtml(annotationSummaryLabel(a))}</option>`).join("")
+          : '<option value="">— select —</option>';
+        // Only surface the picker while annotating; showOnly also manages this.
+        const annotating = el("annotateCard").style.display !== "none";
+        row.style.display = (items.length && annotating) ? "" : "none";
       }
 
       function inputForQuestion(q) {
@@ -761,8 +997,14 @@
       }
 
       function validateSaveAnswers(answers) {
-        if (!String(answers?.binary_success ?? "").trim()) {
+        const bs = String(answers?.binary_success ?? "").trim();
+        if (!bs) {
           return "Please annotate success/failure.";
+        }
+        // The failure taxonomy trio is all-or-nothing, but only for failures — a
+        // (qualified) success may set severity/notes independently (#29).
+        if (bs !== "Failure") {
+          return "";
         }
         const categoryFilled =
           Array.isArray(answers?.failure_category) && answers.failure_category.length > 0;
@@ -775,16 +1017,31 @@
         return "";
       }
 
-      const FAILURE_ONLY_QUESTIONS = ["failure_category", "failure_description", "severity"];
+      function questionCurrentValue(id) {
+        const checked = document.querySelector(`input[type="radio"][name="${CSS.escape(id)}"]:checked`);
+        if (checked) return checked.value;
+        const other = document.querySelector(`[name="${CSS.escape(id)}"]`);
+        return other ? String(other.value ?? "") : "";
+      }
 
+      // Data-driven conditional visibility (#29): a question with
+      // `show_when: {binary_success: [...]}` is shown only when every referenced
+      // question currently holds one of the listed values. Questions without a
+      // `show_when` are always visible. Generalizes the old hard-coded failure hide.
       function applySuccessConditional() {
-        const selected = document.querySelector('input[type="radio"][name="binary_success"]:checked');
-        const isSuccess = selected && selected.value === "Success";
-        FAILURE_ONLY_QUESTIONS.forEach((id) => {
+        const qs = Array.isArray(window.__questionnaireSpec?.questions) ? window.__questionnaireSpec.questions : [];
+        for (const q of qs) {
+          const id = q.id || q.name || q.key;
+          const cond = q && q.show_when;
+          if (!id || !cond || typeof cond !== "object") continue;
           const group = document.querySelector(`[data-question-id="${CSS.escape(id)}"]`);
-          if (!group) return;
-          group.style.display = isSuccess ? "none" : "";
-        });
+          if (!group) continue;
+          const visible = Object.entries(cond).every(([depId, allowed]) => {
+            const vals = Array.isArray(allowed) ? allowed.map(String) : [String(allowed)];
+            return vals.includes(questionCurrentValue(depId));
+          });
+          group.style.display = visible ? "" : "none";
+        }
       }
 
       let currentSampleId = null; // rollout sample_id
@@ -885,7 +1142,7 @@
           const items = await jget("/api/h5/list");
           const arr = Array.isArray(items) ? items : [];
           // Lightweight signature: rel_path + annotated + mtime.
-          const sig = arr.map(it => `${it.rel_path}|${Number(it.annotation_tick_level ?? 0)}|${it.mtime}`).join("\n");
+          const sig = arr.map(it => `${it.rel_path}|${Number(it.annotation_tick_level ?? 0)}|${it.annotated_by_others ? 1 : 0}|${it.mtime}`).join("\n");
           if (sig !== lastH5ListSig) {
             lastH5ListSig = sig;
             window.__h5Items = arr;
@@ -968,11 +1225,14 @@
             const active = (browseRelPath === rp) ? "active" : "";
             const tl = Number(it.annotation_tick_level ?? 0);
             const tick = tl >= 2 ? "✓✓ " : tl >= 1 ? "✓ " : "";
+            const other = it.annotated_by_others
+              ? '<span class="other-mark" title="Also annotated by another annotator">◆</span> '
+              : "";
             const indent = depth * 14;
             lines.push(
               `<div class="tree-row ${active}" data-kind="file" data-rel="${esc(rp)}" style="margin-left:${indent}px;">` +
               `<span class="tree-arrow"></span>` +
-              `<span class="tree-label">${tick}${esc(it._fileName)}</span>` +
+              `<span class="tree-label">${other}${tick}${esc(it._fileName)}</span>` +
               `</div>`
             );
           }
@@ -1016,6 +1276,20 @@
         const ann = existing && typeof existing === "object" ? existing : {};
         const skip = new Set(["annotated_at", "annotator", "source"]);
         const qs = Array.isArray(window.__questionnaireSpec?.questions) ? window.__questionnaireSpec.questions : [];
+        // Reset every managed field first so applying a (possibly partial) annotation —
+        // e.g. copying a previous annotation onto an already-filled form (#27) — never
+        // leaves stale values (like a success_category) from a prior selection.
+        for (const q of qs) {
+          const id = q.id || q.name || q.key;
+          if (!id || skip.has(id)) continue;
+          const type = String(q.type || "text").toLowerCase();
+          if (type === "checkbox" || type === "radio") {
+            document.querySelectorAll(`input[name="${CSS.escape(id)}"]`).forEach((e) => { e.checked = false; });
+          } else {
+            const el0 = document.querySelector(`[name="${CSS.escape(id)}"]`);
+            if (el0) el0.value = "";
+          }
+        }
         for (const q of qs) {
           const id = q.id || q.name || q.key;
           if (!id || skip.has(id)) continue;
@@ -1045,14 +1319,17 @@
         currentBrowseSample = null;
         questionnaireRenderedFor = null;
         videosRenderedFor = null;
+        el("instrEditRow").style.display = "none"; // never carry an open edit onto another episode (#31)
         renderH5List();
         await refresh();
+        prefetchNeighbors(relPath).catch(() => {});
       }
 
       function clearBrowse() {
         browseRelPath = null;
         currentBrowseSample = null;
         el("saveMsg").textContent = "";
+        el("instrEditRow").style.display = "none";
         questionnaireRenderedFor = null;
         videosRenderedFor = null;
         renderH5List();
@@ -1072,7 +1349,7 @@
             showOnly("annotateCard");
 
             if (!currentBrowseSample || currentBrowseSample.rel_path !== browseRelPath) {
-              const sample = await jget(`/api/h5/sample?path=${encodeURIComponent(browseRelPath)}`);
+              const sample = await fetchSampleCached(browseRelPath);
               currentBrowseSample = sample;
               questionnaireRenderedFor = null;
               videosRenderedFor = null;
@@ -1080,6 +1357,7 @@
 
             if (videosRenderedFor !== browseRelPath) {
               renderVideos(currentBrowseSample?.video_urls || {});
+              renderEpisodeFields(currentBrowseSample?.episode_fields || null);
               videosRenderedFor = browseRelPath;
             }
             if (questionnaireRenderedFor !== browseRelPath) {
@@ -1095,6 +1373,7 @@
           showOnly("annotateCard");
           if (videosRenderedFor !== "__browse_landing__") {
             renderVideos({});
+            renderEpisodeFields(null);
             videosRenderedFor = "__browse_landing__";
           }
           if (questionnaireRenderedFor !== "__browse_landing__") {
@@ -1112,7 +1391,7 @@
           showOnly("annotateCard");
 
           if (!currentBrowseSample || currentBrowseSample.rel_path !== browseRelPath) {
-            const sample = await jget(`/api/h5/sample?path=${encodeURIComponent(browseRelPath)}`);
+            const sample = await fetchSampleCached(browseRelPath);
             currentBrowseSample = sample;
             questionnaireRenderedFor = null;
             videosRenderedFor = null;
@@ -1120,6 +1399,7 @@
 
           if (videosRenderedFor !== browseRelPath) {
             renderVideos(currentBrowseSample?.video_urls || {});
+            renderEpisodeFields(currentBrowseSample?.episode_fields || null);
             videosRenderedFor = browseRelPath;
           }
           if (questionnaireRenderedFor !== browseRelPath) {
@@ -1160,6 +1440,7 @@
           // Render videos only when the sample changes.
           if (nextSampleId && videosRenderedFor !== nextSampleId) {
             renderVideos(cs.video_urls || {});
+            renderEpisodeFields(null);
             videosRenderedFor = nextSampleId;
           }
 
@@ -1219,12 +1500,14 @@
         try {
           if (browseRelPath) {
             await jpost(`/api/h5/annotations?path=${encodeURIComponent(browseRelPath)}`, answers);
+            sampleCache.delete(browseRelPath); // cached sample now has a stale annotation
           } else {
             await jpost("/api/annotations", { sample_id: currentSampleId, ...answers });
           }
           el("saveMsg").textContent = "";
           markSaved();
           await pollH5List();
+          loadRecentAnnotations().catch(() => {}); // the just-saved annotation becomes copyable
           if (browseRelPath && autoAdvanceEnabled()) {
             await navigateBy(1);
           }
@@ -1242,6 +1525,51 @@
       el("prevBtn").addEventListener("click", () => navigateBy(-1));
       el("nextBtn").addEventListener("click", () => navigateBy(1));
 
+      // Editable task instruction (#31)
+      el("editInstrBtn").addEventListener("click", () => {
+        if (!browseRelPath) return;
+        const cur = String(currentBrowseSample?.metadata?.language_instruction || "").trim();
+        el("instrEditInput").value = cur;
+        el("instrEditRow").style.display = "";
+        el("instrEditInput").focus();
+      });
+      el("instrCancelBtn").addEventListener("click", () => { el("instrEditRow").style.display = "none"; });
+
+      // Autofill: copy a chosen previous annotation into the form (#27)
+      el("autofillSelect").addEventListener("change", () => {
+        const items = window.__recentAnnotations || [];
+        const idx = parseInt(el("autofillSelect").value, 10);
+        if (Number.isInteger(idx) && items[idx]) {
+          populateForm(items[idx]);
+          setDirty(true);
+          el("saveMsg").textContent = "Copied from a previous annotation — review and Save.";
+        }
+        el("autofillSelect").value = "";
+      });
+      el("instrSaveBtn").addEventListener("click", async () => {
+        if (!browseRelPath) return;
+        const val = el("instrEditInput").value.trim();
+        if (!val) { alert("Instruction cannot be empty."); return; }
+        el("instrSaveBtn").disabled = true;
+        try {
+          await jpost(`/api/h5/instruction?path=${encodeURIComponent(browseRelPath)}`, { instruction: val });
+          if (currentBrowseSample && currentBrowseSample.metadata) {
+            currentBrowseSample.metadata.language_instruction = val;
+          }
+          if (currentBrowseSample && currentBrowseSample.episode_fields && currentBrowseSample.episode_fields.attributes) {
+            currentBrowseSample.episode_fields.attributes.language_instruction = val;
+            renderEpisodeFields(currentBrowseSample.episode_fields); // keep the data panel in sync
+          }
+          el("sessionTaskInstruction").textContent = val;
+          sampleCache.delete(browseRelPath); // cached sample now has a stale instruction
+          el("instrEditRow").style.display = "none";
+        } catch (e) {
+          alert(String(e));
+        } finally {
+          el("instrSaveBtn").disabled = false;
+        }
+      });
+
       // Dirty tracking: any real edit flips the indicator and clears stale messages (#34).
       el("questionnaire").addEventListener("input", () => { setDirty(true); el("saveMsg").textContent = ""; });
       el("questionnaire").addEventListener("change", () => { setDirty(true); el("saveMsg").textContent = ""; });
@@ -1256,10 +1584,41 @@
         chk.addEventListener("change", () => localStorage.setItem(KEY, chk.checked ? "1" : "0"));
       })();
 
+      // Persisted video controls: playback speed (#32) + sync toggle (#25).
+      (function initVideoControls() {
+        const rateSel = el("playbackRateSel");
+        if (rateSel) {
+          const stored = String(getPlaybackRate());
+          if ([...rateSel.options].some((o) => o.value === stored)) rateSel.value = stored;
+          rateSel.addEventListener("change", () => {
+            localStorage.setItem(RATE_KEY, rateSel.value);
+            applyPlaybackRate(parseFloat(rateSel.value) || 1);
+          });
+        }
+        const syncChk = el("syncVideosChk");
+        if (syncChk) {
+          syncChk.checked = localStorage.getItem(SYNC_KEY) === "1";
+          syncChk.addEventListener("change", () => localStorage.setItem(SYNC_KEY, syncChk.checked ? "1" : "0"));
+        }
+      })();
+
       // Keyboard shortcuts (#33). Ctrl/Cmd+S / Ctrl/Cmd+Enter always save; the rest
       // are ignored while typing in a field.
       document.addEventListener("keydown", (e) => {
         const t = e.target;
+        // The instruction editor owns Enter=save / Esc=cancel / Ctrl+S=save (#31), so its
+        // keys never fall through to the questionnaire save hotkey (which would save the
+        // annotation and auto-advance, silently discarding the typed instruction).
+        if (t === el("instrEditInput")) {
+          if (e.key === "Enter" || ((e.ctrlKey || e.metaKey) && (e.key === "s" || e.key === "S"))) {
+            e.preventDefault();
+            el("instrSaveBtn").click();
+          } else if (e.key === "Escape") {
+            e.preventDefault();
+            el("instrCancelBtn").click();
+          }
+          return;
+        }
         const typing = t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.tagName === "SELECT" || t.isContentEditable);
         if ((e.ctrlKey || e.metaKey) && (e.key === "s" || e.key === "S" || e.key === "Enter")) {
           e.preventDefault();
@@ -1295,6 +1654,7 @@
       }
 
       loadH5List().catch(() => {});
+      loadRecentAnnotations().catch(() => {});
       if (typeof ANNOTATOR_BROWSE_ONLY === "undefined" || !ANNOTATOR_BROWSE_ONLY) {
         setInterval(() => refresh().catch(() => {}), 800);
         setInterval(() => pollH5List().catch(() => {}), 1500);
