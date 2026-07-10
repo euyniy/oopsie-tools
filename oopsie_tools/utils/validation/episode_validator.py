@@ -184,7 +184,11 @@ def _failure_trio_fill_flags(attrs: dict[str, Any]) -> tuple[bool, bool, bool]:
 
 
 def _validate_annotations(data: EpisodeData) -> None:
-    """Each annotator subgroup must have a numeric success score in [0.0, 1.0]."""
+    """Every annotator subgroup must have a numeric success score in [0.0, 1.0].
+
+    The failure taxonomy trio (category/description/severity) is all-or-nothing, but
+    only for *failures* — a qualified success may record severity/notes on its own (#29).
+    """
     assert data.annotations, "annotations dict is empty"
 
     for annotator, attrs in data.annotations.items():
@@ -207,11 +211,13 @@ def _validate_annotations(data: EpisodeData) -> None:
             f"episode_annotations/{annotator}/success out of range [0.0, 1.0]: {success}"
         )
 
-        # TODO: Make sure this is working as expected
-        cat_ok, desc_ok, sev_ok = _failure_trio_fill_flags(attrs)
-        filled = int(cat_ok) + int(desc_ok) + int(sev_ok)
-        assert filled in (0, 3), (
-            f"episode_annotations/{annotator}: failure_category (taxonomy), "
-            f"failure_description, and severity must be all filled or all empty "
-            f"(found {filled} of 3 filled). Either complete all three or leave all three empty."
-        )
+        # The failure taxonomy trio is all-or-nothing, but only for failures;
+        # successes (including qualified successes) are exempt.
+        if success < 0.5:
+            cat_ok, desc_ok, sev_ok = _failure_trio_fill_flags(attrs)
+            filled = int(cat_ok) + int(desc_ok) + int(sev_ok)
+            assert filled in (0, 3), (
+                f"episode_annotations/{annotator}: failure_category (taxonomy), "
+                f"failure_description, and severity must be all filled or all empty "
+                f"(found {filled} of 3 filled). Either complete all three or leave all three empty."
+            )
